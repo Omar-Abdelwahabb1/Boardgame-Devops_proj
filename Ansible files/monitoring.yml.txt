@@ -1,0 +1,111 @@
+---
+- name: Monitoring server configuration (Prometheus & Grafana)
+  hosts: monitoring
+  become: true
+  tasks:
+
+    - name: Update apt package cache
+      apt:
+        update_cache: true
+
+    - name: Create Prometheus user
+      user:
+        name: omar-prom
+        shell: /usr/sbin/nologin  # for security
+
+    - name: Create Prometheus directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: omar-prom
+        group: omar-prom
+        mode: '0755'  # 0 to tell Ansible it's an octal number
+      loop:
+        - /etc/prometheus  # gwah l configration file bta3 prom
+        - /var/lib/prometheus  # dh data directory bn5zn l metrics feh
+
+    - name: Download Prometheus binary
+      get_url:
+        url: https://github.com/prometheus/prometheus/releases/download/v2.47.0/prometheus-2.47.0.linux-amd64.tar.gz
+        dest: /tmp/prometheus.tar.gz
+
+    - name: Extract Prometheus binary
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /tmp
+        remote_src: true  # l file mwgod 3la ansible server already fm4 m7tag y3mlo copy mn l control node l hna
+
+    - name: Move Prometheus binaries to /usr/local/bin
+      copy:
+        src: "/tmp/prometheus-2.47.0.linux-amd64/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        remote_src: yes
+        mode: '0755'
+      loop:
+        - prometheus
+        - promtool
+
+    - name: Move Prometheus configuration files
+      copy:
+        src: "/tmp/prometheus-2.47.0.linux-amd64/{{ item }}"
+        dest: "/etc/prometheus/{{ item }}"
+        remote_src: yes
+        mode: '0644'
+      loop:
+        - prometheus.yml
+        - consoles
+        - console_libraries
+
+        - name: Create Prometheus systemd service # for running automatically (fe l automation mofeda)
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus
+          Wants=network-online.target  # Service depends on network-online target but doesn't strictly require it
+          After=network-online.target  # Ensures Prometheus starts only after the network is available
+
+          [Service]
+          User=omar-prom
+          Group=omar-prom
+          Type=simple
+          ExecStart=/usr/local/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus
+          Restart=on-failure  # Restart Prometheus on failure
+
+          [Install]
+          WantedBy=multi-user.target  # Ensure the service starts when reaching multi-user target (default)
+
+    - name: Set mode for Prometheus systemd service file
+      file:
+        path: /etc/systemd/system/prometheus.service
+        mode: '0644'
+
+    - name: Reload systemd and start Prometheus
+      systemd:
+        name: prometheus
+        state: started
+        enabled: true
+        daemon_reload: yes  # Ensure systemd re-reads the configuration
+
+    # ------------------------- Grafana --------------------------
+
+    - name: Add Grafana APT key for package verification
+      apt_key:
+        url: https://packages.grafana.com/gpg.key
+        state: present
+
+    - name: Add Grafana APT repository
+      apt_repository:
+        repo: "deb https://packages.grafana.com/oss/deb stable main"
+        state: present
+
+    - name: Install Grafana
+      apt:
+        name: grafana
+        state: present
+
+    - name: Ensure Grafana service is running
+      systemd:
+        name: grafana-server
+        state: started
+        enabled: true

@@ -1,0 +1,78 @@
+- name: Install and Configure Nexus
+  hosts: nexus
+  become: yes
+  tasks:
+    - name: Install Java for Nexus
+      apt:
+        name: openjdk-17-jdk
+        state: present
+
+    - name: Create nexus user
+      ansible.builtin.user:
+        name: nexus
+        shell: /bin/bash
+        home: /opt/nexus
+        state: present
+
+    - name: Download Nexus
+      get_url:
+        url: https://download.sonatype.com/nexus/3/latest-unix.tar.gz
+        dest: /tmp/nexus.tar.gz
+
+    - name: Extract Nexus
+      ansible.builtin.unarchive:
+        src: /tmp/nexus.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Find extracted Nexus directory
+      command: "find /opt -type d -name 'nexus-*' -print -quit"
+      register: nexus_dir
+      changed_when: false
+      failed_when: false
+
+    - name: Debug Nexus directory
+      debug:
+        var: nexus_dir.stdout
+
+    - name: Remove existing /opt/nexus directory if it exists
+      file:
+        path: /opt/nexus
+        state: absent
+      when: nexus_dir.stdout != ""
+
+    - name: Symlink nexus directory
+      file:
+        src: "{{ nexus_dir.stdout }}"
+        dest: /opt/nexus
+        state: link
+      when: nexus_dir.stdout != ""
+
+    - name: Set run-as user in Nexus script
+      lineinfile:
+        path: "{{ nexus_dir.stdout }}/bin/nexus.rc"
+        line: 'run_as_user="nexus"'
+
+    - name: Create Nexus service file
+      copy:
+        dest: /etc/systemd/system/nexus.service
+        content: |
+          [Unit]
+          Description=nexus service
+          After=network.target
+
+          [Service]
+          Type=forking
+          ExecStart={{ nexus_dir.stdout }}/bin/nexus start
+          ExecStop={{ nexus_dir.stdout }}/bin/nexus stop
+          User=nexus
+          Restart=on-abort
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start Nexus service
+      systemd:
+        name: nexus
+        state: started
+        enabled: true
